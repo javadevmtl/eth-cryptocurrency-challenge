@@ -1,19 +1,20 @@
-import org.bitcoinj.crypto.*;
+import org.bitcoinj.crypto.ChildNumber;
+import org.bitcoinj.crypto.DeterministicKey;
+import org.bitcoinj.wallet.DeterministicKeyChain;
 import org.bitcoinj.wallet.DeterministicSeed;
-import org.web3j.crypto.ECKeyPair;
 import org.web3j.crypto.Keys;
-import org.web3j.utils.Numeric;
 
-import java.math.BigInteger;
-import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RecursiveAction;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class StringPermutationsParallel {
-    public static AtomicLong count = new AtomicLong();
-    public static long startTime = System.currentTimeMillis();
+    static AtomicLong count = new AtomicLong();
+    static long startTime = System.currentTimeMillis();
+    static ForkJoinPool pool;
 
     public static void main(String[] args) {
         String[] strings = {
@@ -23,8 +24,10 @@ public class StringPermutationsParallel {
                 "monitor", "interest", "logic", "sausage", "toilet", "pencil"
         };
         int numThreads = 16;
-        ForkJoinPool pool = new ForkJoinPool(numThreads);
+        pool = new ForkJoinPool(numThreads);
         pool.invoke(new PermuteAction(strings, 0, numThreads));
+
+
     }
 
     private static class PermuteAction extends RecursiveAction {
@@ -41,37 +44,35 @@ public class StringPermutationsParallel {
         @Override
         protected void compute() {
             if (index == arr.length - 1) {
-                if((count.getAndIncrement() % 1000) == 0) {
+                if((count.incrementAndGet() % 1000) == 0) {
                     long endTime = System.currentTimeMillis();
                     System.out.println(count.get() + ": " + (endTime - startTime) + "ms, Thread: " + Thread.currentThread().getName());
                     startTime = System.currentTimeMillis();
                 }
 
                 try {
-                    // Generate the deterministic seed from the seed phrase
-                    DeterministicSeed seed = new DeterministicSeed(Arrays.asList(arr), null, "", new SecureRandom().nextInt());
-                    DeterministicKey masterKey = HDKeyDerivation.createMasterPrivateKey(seed.getSeedBytes());
+                    long creationTimeSeconds = System.currentTimeMillis() / 1000L;
+                    DeterministicSeed deterministicSeed = new DeterministicSeed(Arrays.asList(arr), null, "", creationTimeSeconds);
+                    DeterministicKeyChain keyChain = DeterministicKeyChain.builder().seed(deterministicSeed).build();
 
-                    DeterministicKey purpose44 = HDKeyDerivation.deriveChildKey(masterKey, new ChildNumber(44 | ChildNumber.HARDENED_BIT));
-                    DeterministicKey purpose60 = HDKeyDerivation.deriveChildKey(purpose44, new ChildNumber(60 | ChildNumber.HARDENED_BIT));
-                    DeterministicKey account0 = HDKeyDerivation.deriveChildKey(purpose60, new ChildNumber(0 | ChildNumber.HARDENED_BIT));
-                    DeterministicKey externalChain = HDKeyDerivation.deriveChildKey(account0, ChildNumber.ZERO_HARDENED);
-                    DeterministicKey childKey = HDKeyDerivation.deriveChildKey(externalChain, ChildNumber.ZERO);
-                    
-                    byte[] privateKeyBytes = childKey.getPrivKeyBytes();
+                    int index = 0; // index of the key pair
+//                    String derivationPath = "m/44'/60'/0'/0/" + index; // Ethereum derivation path
+                    List<ChildNumber> path = new ArrayList<>();
+                    path.add(new ChildNumber(44, true)); // BIP44 purpose
+                    path.add(new ChildNumber(60, true)); // ETH coin type
+                    path.add(new ChildNumber(0, true)); // account number
+                    path.add(new ChildNumber(0, false)); // external chain (i.e. public keys)
+                    path.add(new ChildNumber(0, false)); // index of the child key
 
-                    BigInteger privateKey = Numeric.toBigInt(privateKeyBytes);
+                    DeterministicKey key = keyChain.getKeyByPath(path, true);
+                    String address = "0x" + Keys.getAddress(key.getPublicKeyAsHex());
 
-                    ECKeyPair keyPair = ECKeyPair.create(privateKey);
-                    String publicKey = Numeric.toHexStringNoPrefix(keyPair.getPublicKey());
+                    if("0xb6f420204511C7fE9Dd3DE14266a260e8f11aC37".equals(address)) {
+                        System.out.println("We broke it: " + String.join(" ", arr));
 
-                    // Generate the Ethereum public address from the public key
-                    String address = Keys.getAddress(publicKey);
-
-                    // Print out the private key, public key, and address
-//                    System.out.println("Private key: " + Numeric.toHexStringNoPrefix(privateKey));
-//                    System.out.println("Public key: " + publicKey);
-//                    System.out.println("Public address: " + address + ", Thread: " + Thread.currentThread().getName());
+                        pool.shutdown();
+                        System.exit(0);
+                    }
 
                 }catch(Exception ex) {
                     ex.printStackTrace();
